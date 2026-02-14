@@ -80,6 +80,48 @@ body.theme-dark-mode {
     --captured-bg: rgba(50, 50, 50, 0.3);
 }
 
+body.theme-classic {
+    --bg-color: #ffffff; --text-color: #000000; --splash-bg: rgba(255, 255, 255, 0.98);
+    --splash-text: #000000; --splash-setting-bg: rgba(0, 0, 0, 0.08);
+    --board-border: #000000; --light-square: #ffffff; --dark-square: #000000;
+    --coord-text-color: rgba(0, 0, 0, 0.62);
+    --status-bg: rgba(0, 0, 0, 0.08); --selected-highlight: rgba(127, 127, 127, 0.45);
+    --indicator-dot: rgba(0, 0, 0, 0.42); --indicator-ring: rgba(127, 127, 127, 0.75);
+    --check-highlight-outline: #4f4f4f;
+    --button-primary-bg: #000000; --button-primary-hover: #222222; --button-primary-active: #111111;
+    --button-secondary-bg: #1e1e1e; --button-secondary-hover: #2a2a2a; --button-secondary-active: #121212;
+    --button-tertiary-bg: #303030; --button-tertiary-hover: #3a3a3a; --button-tertiary-active: #222222;
+    --button-theme-bg: #000000; --button-theme-hover: #242424; --button-theme-active: #4a4a4a;
+    --button-theme-text: #ffffff;
+    --button-icon-bg: rgba(0, 0, 0, 0.32); --button-icon-hover: rgba(0, 0, 0, 0.46);
+    --button-icon-active: rgba(0, 0, 0, 0.24); --button-text-color: #ffffff;
+    --modal-bg: rgba(255, 255, 255, 0.98); --modal-border: #000000;
+    --history-bg: rgba(0, 0, 0, 0.05); --history-border: rgba(0, 0, 0, 0.22);
+    --captured-bg: rgba(0, 0, 0, 0.06);
+}
+
+body.theme-classic .piece {
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55));
+}
+
+body.theme-classic .piece.bP,
+body.theme-classic .piece.bR,
+body.theme-classic .piece.bN,
+body.theme-classic .piece.bB,
+body.theme-classic .piece.bQ,
+body.theme-classic .piece.bK {
+    filter:
+        drop-shadow(1px 0 0 rgba(255, 255, 255, 0.95))
+        drop-shadow(-1px 0 0 rgba(255, 255, 255, 0.95))
+        drop-shadow(0 1px 0 rgba(255, 255, 255, 0.95))
+        drop-shadow(0 -1px 0 rgba(255, 255, 255, 0.95))
+        drop-shadow(0 0 1px rgba(255, 255, 255, 0.95));
+}
+
+body.theme-classic .btn-icon {
+    border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
 
 /* --- General Styles --- */
 body {
@@ -141,7 +183,7 @@ i { margin-right: 0.4em; }
 #bot-difficulty {
     padding: 8px 10px;
     font-size: 0.9em;
-    color: var(--text-color);
+    color: var(--button-theme-text, var(--text-color));
     background-color: var(--button-theme-bg);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 5px;
@@ -152,7 +194,7 @@ i { margin-right: 0.4em; }
 }
 .theme-btn {
     padding: 8px 12px; font-size: 0.9em; cursor: pointer; background-color: var(--button-theme-bg);
-    color: var(--text-color); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 5px;
+    color: var(--button-theme-text, var(--text-color)); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 5px;
     transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
 }
 .theme-btn:hover { background-color: var(--button-theme-hover); }
@@ -336,6 +378,14 @@ i { margin-right: 0.4em; }
 /* Highlights and Indicators (Selected style removed from here) */
 .legal-move-indicator::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 30%; height: 30%; background-color: var(--indicator-dot); border-radius: 50%; z-index: 0; pointer-events: none; transition: background-color 0.3s ease; }
 .legal-capture-indicator::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; border: 5px solid var(--indicator-ring); border-radius: 50%; box-sizing: border-box; z-index: 0; pointer-events: none; transition: border-color 0.3s ease; }
+body.theme-classic .legal-move-indicator::after {
+    background-color: #9e9e9e;
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #000000;
+}
+body.theme-classic .legal-capture-indicator::after {
+    border: 3px solid #ffffff;
+    box-shadow: inset 0 0 0 2px #000000;
+}
 .indicators-hidden .legal-move-indicator::after, .indicators-hidden .legal-capture-indicator::after { display: none; }
 .check-highlight { outline: 3px solid var(--check-highlight-outline); outline-offset: -3px; transition: outline-color 0.3s ease; }
 
