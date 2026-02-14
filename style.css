@@ -87,7 +87,7 @@ body.theme-classic {
     --coord-text-color: rgba(0, 0, 0, 0.62);
     --status-bg: rgba(0, 0, 0, 0.08); --selected-highlight: rgba(127, 127, 127, 0.45);
     --indicator-dot: rgba(0, 0, 0, 0.42); --indicator-ring: rgba(127, 127, 127, 0.75);
-    --check-highlight-outline: #4f4f4f;
+    --check-highlight-outline: #ff1f1f;
     --button-primary-bg: #000000; --button-primary-hover: #222222; --button-primary-active: #111111;
     --button-secondary-bg: #1e1e1e; --button-secondary-hover: #2a2a2a; --button-secondary-active: #121212;
     --button-tertiary-bg: #303030; --button-tertiary-hover: #3a3a3a; --button-tertiary-active: #222222;
