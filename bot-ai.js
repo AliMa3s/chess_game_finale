@@ -180,7 +180,7 @@
             if (context && context.timedOut) break;
             const snapshot = adapters.createStateSnapshot();
             adapters.applySimulatedMove(move);
-            const score = minimax(
+            let score = minimax(
                 Math.max(0, depth - 1),
                 getOpponentColor(botColor),
                 botColor,
