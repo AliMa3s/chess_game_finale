@@ -3,6 +3,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const boardElement = document.getElementById('chess-board');
     const turnIndicator = document.getElementById('turn-indicator');
     const checkIndicator = document.getElementById('check-indicator');
+    const botLevelIndicator = document.getElementById('bot-level-indicator');
+    const toastContainer = document.getElementById('toast-container');
     const splashScreen = document.getElementById('splash-screen');
     const startGameBtn = document.getElementById('start-game-btn');
     const gameContainer = document.getElementById('game-container');
@@ -13,7 +15,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const backToHomeBtn = document.getElementById('back-to-home-btn');
     const boardContainer = document.getElementById('board-container');
     const boardAreaWrapper = document.querySelector('.board-area-wrapper'); // Wrapper for coord flip
-    const themeButtons = document.querySelectorAll('.theme-btn');
+    const themeButtons = document.querySelectorAll('.theme-btn[data-theme]');
+    const modeButtons = document.querySelectorAll('.mode-btn[data-mode]');
+    const difficultySetting = document.getElementById('difficulty-setting');
+    const botDifficultySelect = document.getElementById('bot-difficulty');
     const indicatorCheckbox = document.getElementById('toggle-indicators');
     const flipBoardBtn = document.getElementById('flip-board-btn');
     const soundToggleBtn = document.getElementById('sound-toggle-btn');
@@ -42,15 +47,51 @@ document.addEventListener('DOMContentLoaded', () => {
     let moveHistory = [];
     let currentMoveNumber = 1;
     let lastMove = null; // Stores { fromRow, fromCol, toRow, toCol }
+    let gameMode = 'local'; // local | bot
+    let botDifficulty = 'easy'; // easy | medium | hard | expert
+    let botMoveTimeoutId = null;
+    let positionRepetitionCounts = {};
+    let lastBotToastText = '';
 
 
     // --- Constants ---
     const pieceValues = { K: 1000, Q: 9, R: 5, B: 3, N: 3, P: 1 };
+    const botColor = 'b';
     const pieceSVGs = { // Ensure these paths match your files
         wP: 'assets/pieces/white_pawn.svg', wR: 'assets/pieces/white_rook.svg', wN: 'assets/pieces/white_knight.svg',
         wB: 'assets/pieces/white_bishop.svg', wQ: 'assets/pieces/white_queen.svg', wK: 'assets/pieces/white_king.svg',
         bP: 'assets/pieces/black_pawn.svg', bR: 'assets/pieces/black_rook.svg', bN: 'assets/pieces/black_knight.svg',
         bB: 'assets/pieces/black_bishop.svg', bQ: 'assets/pieces/black_queen.svg', bK: 'assets/pieces/black_king.svg',
+    };
+    const difficultyLabels = { easy: 'Easy', medium: 'Medium', hard: 'Hard', expert: 'Expert' };
+    const botPhraseProfiles = {
+        easy: {
+            leads: ['Okay', 'Hmm', 'Nice move'],
+            actions: ['let me try something', 'I might have an idea', 'checking a simple line']
+        },
+        medium: {
+            leads: ['I see', 'Interesting', 'Good pressure'],
+            actions: ['I am calculating', 'let me improve this', 'searching for a clean move']
+        },
+        hard: {
+            leads: ['Wow', 'Tricky position', 'I see your plan'],
+            actions: ['running deep lines', 'tightening the position', 'looking for the strongest continuation']
+        },
+        expert: {
+            leads: ['No mistakes now', 'Deep line incoming', 'Sharp position'],
+            actions: ['calculating forcing lines', 'hunting tactical resources', 'playing only top candidates']
+        }
+    };
+    const phaseHints = {
+        opening: ['opening shape looks fresh', 'development matters here', 'this opening can turn sharp'],
+        middlegame: ['center tension is real', 'piece activity is everything', 'one move can swing this'],
+        endgame: ['king activity is critical now', 'endgame precision time', 'small details decide this']
+    };
+    const botMoodPhrases = {
+        easy: ['Bot mood: Easy and playful', 'Bot mood: Easy, just vibing'],
+        medium: ['Bot mood: Medium and focused', 'Bot mood: Medium, reading the board'],
+        hard: ['Bot mood: Hard and serious', 'Bot mood: Hard, no free moves'],
+        expert: ['Bot mood: Expert, full calculate mode', 'Bot mood: Expert, razor sharp']
     };
     const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
     const ranks = ['8', '7', '6', '5', '4', '3', '2', '1']; // Rank 1 is row 7
@@ -80,12 +121,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Preferences ---
     function loadPreferences() {
+        const savedMode = localStorage.getItem('chessGameMode') || 'local';
+        applyGameMode(savedMode);
+        const savedDifficulty = localStorage.getItem('chessBotDifficulty') || 'easy';
+        applyBotDifficulty(savedDifficulty);
         const savedTheme = localStorage.getItem('chessTheme') || 'default';
         applyTheme(savedTheme);
         const savedIndicatorPref = localStorage.getItem('showIndicators') !== 'false';
         indicatorCheckbox.checked = savedIndicatorPref;
         applyIndicatorPreference(savedIndicatorPref);
         loadSoundPreference();
+    }
+    function applyGameMode(modeName) {
+        gameMode = modeName === 'bot' ? 'bot' : 'local';
+        modeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === gameMode));
+        difficultySetting.classList.toggle('option-hidden', gameMode !== 'bot');
+        if (gameMode !== 'bot') {
+            clearBotMoveTimeout();
+            boardContainer.classList.remove('interaction-disabled');
+        }
+        updateBotLevelIndicator();
+        localStorage.setItem('chessGameMode', gameMode);
+    }
+    function applyBotDifficulty(level) {
+        const allowedLevels = ['easy', 'medium', 'hard', 'expert'];
+        botDifficulty = allowedLevels.includes(level) ? level : 'easy';
+        if (botDifficultySelect) botDifficultySelect.value = botDifficulty;
+        updateBotLevelIndicator();
+        if (gameMode === 'bot') {
+            showToast(getBotMoodPhrase(), 900);
+        }
+        localStorage.setItem('chessBotDifficulty', botDifficulty);
     }
     function applyTheme(themeName) {
         bodyElement.className = '';
@@ -105,9 +171,203 @@ document.addEventListener('DOMContentLoaded', () => {
         renderCapturedPieces();
         renderMoveHistory();
     }
+    function updateBotLevelIndicator() {
+        if (!botLevelIndicator) return;
+        if (gameMode !== 'bot') {
+            botLevelIndicator.textContent = '';
+            botLevelIndicator.classList.add('option-hidden');
+            return;
+        }
+        const levelLabel = difficultyLabels[botDifficulty] || difficultyLabels.easy;
+        botLevelIndicator.textContent = `Bot ${levelLabel}`;
+        botLevelIndicator.classList.remove('option-hidden');
+    }
+    function showToast(message, durationMs = 1200) {
+        if (!toastContainer || !message) return;
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.textContent = message;
+        toastContainer.appendChild(toast);
+
+        const fadeDelay = Math.max(260, durationMs);
+        setTimeout(() => {
+            toast.classList.add('fade-out');
+            setTimeout(() => {
+                if (toast.parentElement) toast.remove();
+            }, 180);
+        }, fadeDelay);
+    }
+    function pickRandom(list) {
+        if (!Array.isArray(list) || list.length === 0) return '';
+        return list[Math.floor(Math.random() * list.length)] || '';
+    }
+    function pickRandomDifferent(list, previousValue) {
+        if (!Array.isArray(list) || list.length === 0) return '';
+        if (list.length === 1) return list[0];
+        let candidate = pickRandom(list);
+        let guard = 0;
+        while (candidate === previousValue && guard < 8) {
+            candidate = pickRandom(list);
+            guard++;
+        }
+        return candidate;
+    }
+    function getGamePhaseKey() {
+        const moveCount = moveHistory.length;
+        const capturedCount = capturedWhitePieces.length + capturedBlackPieces.length;
+        if (moveCount < 10 && capturedCount < 4) return 'opening';
+        if (moveCount < 36) return 'middlegame';
+        return 'endgame';
+    }
+    function getBotMoodPhrase() {
+        const moodList = botMoodPhrases[botDifficulty] || botMoodPhrases.easy;
+        return pickRandom(moodList) || `Bot mood: ${difficultyLabels[botDifficulty] || 'Easy'}`;
+    }
+    function getBotThinkingPhrase() {
+        const profile = botPhraseProfiles[botDifficulty] || botPhraseProfiles.easy;
+        const phase = getGamePhaseKey();
+        const lead = pickRandom(profile.leads);
+        const action = pickRandom(profile.actions);
+        const phaseHint = pickRandom(phaseHints[phase] || phaseHints.middlegame);
+        const variants = [
+            `${lead}. ${action}.`,
+            `${lead}... ${action}.`,
+            `${lead}. ${phaseHint}.`,
+            `${action}. ${phaseHint}.`
+        ];
+        const message = pickRandomDifferent(variants, lastBotToastText);
+        lastBotToastText = message;
+        return message || 'Thinking...';
+    }
+    function shouldBotPlay() {
+        return gameMode === 'bot' && currentPlayer === botColor && !gameIsOver && !promotionState.active;
+    }
+    function getBotThinkTime() {
+        if (window.ChessBotAI && typeof window.ChessBotAI.getThinkTime === 'function') {
+            return window.ChessBotAI.getThinkTime(botDifficulty);
+        }
+        return 250;
+    }
+    function clearBotMoveTimeout() {
+        if (botMoveTimeoutId !== null) {
+            clearTimeout(botMoveTimeoutId);
+            botMoveTimeoutId = null;
+        }
+    }
+    function getPositionKey(sideToMove = currentPlayer) {
+        const rows = [];
+        for (let r = 0; r < 8; r++) {
+            rows.push(board[r].map(cell => cell || '..').join(','));
+        }
+        return `${sideToMove}|${rows.join('/')}`;
+    }
+    function resetPositionHistory() {
+        positionRepetitionCounts = {};
+    }
+    function recordCurrentPosition() {
+        const key = getPositionKey(currentPlayer);
+        positionRepetitionCounts[key] = (positionRepetitionCounts[key] || 0) + 1;
+    }
+    function createStateSnapshot() {
+        return {
+            board: board.map(row => row.slice()),
+            whiteKingPos: { ...whiteKingPos },
+            blackKingPos: { ...blackKingPos }
+        };
+    }
+    function restoreStateSnapshot(snapshot) {
+        board = snapshot.board.map(row => row.slice());
+        whiteKingPos = { ...snapshot.whiteKingPos };
+        blackKingPos = { ...snapshot.blackKingPos };
+    }
+    function applySimulatedMove(move) {
+        const movingPiece = board[move.fromRow][move.fromCol];
+        board[move.toRow][move.toCol] = movingPiece;
+        board[move.fromRow][move.fromCol] = null;
+        if (movingPiece === 'wK') whiteKingPos = { row: move.toRow, col: move.toCol };
+        if (movingPiece === 'bK') blackKingPos = { row: move.toRow, col: move.toCol };
+        if (movingPiece && movingPiece[1] === 'P' && (move.toRow === 0 || move.toRow === 7)) {
+            const promotionChoice = move.promotionChoice || 'Q';
+            board[move.toRow][move.toCol] = movingPiece[0] + promotionChoice;
+        }
+    }
+    function getAllLegalMovesWithContext(playerColor) {
+        const allMoves = [];
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const piece = board[r][c];
+                if (!piece || piece[0] !== playerColor) continue;
+                const legal = calculateLegalMoves(r, c);
+                legal.forEach(move => {
+                    const moveDetails = {
+                        fromRow: r,
+                        fromCol: c,
+                        toRow: move.row,
+                        toCol: move.col,
+                        piece,
+                        captured: board[move.row][move.col]
+                    };
+                    if (piece[1] === 'P' && (move.row === 0 || move.row === 7)) {
+                        moveDetails.promotionChoice = 'Q';
+                    }
+                    allMoves.push(moveDetails);
+                });
+            }
+        }
+        return allMoves;
+    }
+    function chooseBotMove() {
+        const legalMoves = getAllLegalMovesWithContext(botColor);
+        if (!legalMoves.length) return null;
+        if (!window.ChessBotAI || typeof window.ChessBotAI.chooseMove !== 'function') {
+            return legalMoves[Math.floor(Math.random() * legalMoves.length)];
+        }
+        return window.ChessBotAI.chooseMove({
+            difficulty: botDifficulty,
+            botColor: botColor,
+            repetitionCounts: positionRepetitionCounts,
+            adapters: {
+                getAllLegalMovesWithContext,
+                isInCheck,
+                getBoardState: () => board,
+                getKingPositions: () => ({
+                    white: { ...whiteKingPos },
+                    black: { ...blackKingPos }
+                }),
+                createStateSnapshot,
+                restoreStateSnapshot,
+                applySimulatedMove
+            }
+        });
+    }
+    function scheduleBotMove() {
+        clearBotMoveTimeout();
+        boardContainer.classList.add('interaction-disabled');
+        const thinkingLine = getBotThinkingPhrase();
+        const thinkTime = getBotThinkTime();
+        showToast(thinkingLine, Math.max(thinkTime + 260, 900));
+        botMoveTimeoutId = setTimeout(() => {
+            botMoveTimeoutId = null;
+            if (!shouldBotPlay()) {
+                boardContainer.classList.remove('interaction-disabled');
+                return;
+            }
+            const botMove = chooseBotMove();
+            if (!botMove) {
+                checkGameStatus();
+                boardContainer.classList.remove('interaction-disabled');
+                return;
+            }
+            makeMove(botMove);
+            if (!gameIsOver && !shouldBotPlay()) {
+                boardContainer.classList.remove('interaction-disabled');
+            }
+        }, thinkTime);
+    }
 
     // --- Navigation ---
     function goToHomeScreen() {
+        clearBotMoveTimeout();
         gameContainer.classList.add('hidden'); splashScreen.classList.remove('hidden');
         gameOverMessage.classList.add('hidden'); promotionModal.classList.add('hidden');
         boardContainer.classList.remove('interaction-disabled');
@@ -116,6 +376,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Initialization ---
     function setupBoard() {
+        clearBotMoveTimeout();
         board = [
             ['bR', 'bN', 'bB', 'bQ', 'bK', 'bB', 'bN', 'bR'], ['bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP'],
             Array(8).fill(null), Array(8).fill(null), Array(8).fill(null), Array(8).fill(null),
@@ -138,7 +399,11 @@ document.addEventListener('DOMContentLoaded', () => {
         checkIndicator.textContent = '';
         gameOverMessage.classList.add('hidden'); promotionModal.classList.add('hidden');
         boardContainer.classList.remove('interaction-disabled');
+        updateBotLevelIndicator();
+        resetPositionHistory();
+        recordCurrentPosition();
         playSound('start');
+        if (shouldBotPlay()) scheduleBotMove();
     }
 
     // --- Rendering Functions ---
@@ -295,7 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Event Handling ---
     function handleSquareClick(event) {
-        if (gameIsOver || promotionState.active) return;
+        if (gameIsOver || promotionState.active || shouldBotPlay()) return;
 
         const squareElement = event.currentTarget;
         const row = parseInt(squareElement.dataset.row);
@@ -351,6 +616,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // Check for Pawn Promotion
         const promotionRank = moveDetails.piece[0] === 'w' ? 0 : 7;
         if (moveDetails.piece[1] === 'P' && moveDetails.toRow === promotionRank) {
+             if (moveDetails.promotionChoice) {
+                 board[moveDetails.toRow][moveDetails.toCol] = moveDetails.piece[0] + moveDetails.promotionChoice;
+                 moveDetails.promotion = moveDetails.promotionChoice;
+                 playSound('promote');
+                 finalizeMove(moveDetails);
+                 return;
+             }
              // Update last move state *before* initiating promotion
              lastMove = { fromRow: moveDetails.fromRow, fromCol: moveDetails.fromCol, toRow: moveDetails.toRow, toCol: moveDetails.toCol };
              // Don't render here, let initiatePromotion handle showing modal over existing state
@@ -394,6 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
           // Switch Player & Clear Selections
           switchPlayer();
+          recordCurrentPosition();
           clearHighlights(); // Clears .selected, .legal-* indicators
           selectedSquare = null; legalMoves = [];
 
@@ -408,6 +681,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
           // Increment Move Number
           if (currentPlayer === 'w') { currentMoveNumber++; }
+
+          if (shouldBotPlay()) {
+              scheduleBotMove();
+          }
       }
 
     function switchPlayer() { currentPlayer = currentPlayer === 'w' ? 'b' : 'w'; updateTurnIndicator(); }
@@ -503,6 +780,10 @@ document.addEventListener('DOMContentLoaded', () => {
     backToHomeBtn.addEventListener('click', goToHomeScreen);
     soundToggleBtn.addEventListener('click', toggleMute);
     flipBoardBtn.addEventListener('click', applyBoardFlip); // Corrected function call
+    modeButtons.forEach(button => button.addEventListener('click', () => applyGameMode(button.dataset.mode)));
+    if (botDifficultySelect) {
+        botDifficultySelect.addEventListener('change', (event) => applyBotDifficulty(event.target.value));
+    }
     themeButtons.forEach(button => button.addEventListener('click', () => applyTheme(button.dataset.theme)));
     indicatorCheckbox.addEventListener('change', (event) => { applyIndicatorPreference(event.target.checked); if (selectedSquare) highlightLegalMoves(legalMoves); });
     promotionChoices.addEventListener('click', (event) => {

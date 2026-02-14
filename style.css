@@ -95,6 +95,7 @@ i { margin-right: 0.4em; }
     padding: 10px 20px; font-size: 1em; cursor: pointer; border: none;
     border-radius: 5px; transition: background-color 0.2s ease, transform 0.1s ease;
     color: var(--button-text-color); display: inline-flex; align-items: center; justify-content: center;
+    text-decoration: none;
 }
 .btn:active { transform: scale(0.97); }
 .btn i { margin-right: 6px; }
@@ -135,6 +136,20 @@ i { margin-right: 0.4em; }
 .setting-option input[type="checkbox"] { margin-right: 5px; cursor: pointer; transform: scale(1.2); }
 .setting-option input[type="checkbox"] + label { cursor: pointer; }
 .setting-option > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.option-hidden { display: none !important; }
+.mode-btn { min-width: 92px; }
+#bot-difficulty {
+    padding: 8px 10px;
+    font-size: 0.9em;
+    color: var(--text-color);
+    background-color: var(--button-theme-bg);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+}
+#bot-difficulty:focus {
+    outline: 2px solid var(--button-theme-active);
+    outline-offset: 1px;
+}
 .theme-btn {
     padding: 8px 12px; font-size: 0.9em; cursor: pointer; background-color: var(--button-theme-bg);
     color: var(--text-color); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 5px;
@@ -144,6 +159,7 @@ i { margin-right: 0.4em; }
 .theme-btn.active { background-color: var(--button-theme-active); border-color: var(--button-theme-active); font-weight: bold; }
 .theme-btn:active { transform: scale(0.97); }
 #start-game-btn { margin-top: 10px; padding: 12px 25px; font-size: 1.1em; }
+#support-link { margin-top: 12px; }
 
 
 /* --- Game Container Layout --- */
@@ -165,10 +181,67 @@ i { margin-right: 0.4em; }
 #controls-bar { display: flex; gap: 10px; }
 #status-bar {
     padding: 8px 12px; background-color: var(--status-bg); border-radius: 5px;
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; align-items: center; gap: 10px;
     font-size: clamp(0.9em, 2.5vw, 1.1em); flex-grow: 1; margin-left: 10px;
 }
-#check-indicator { color: var(--check-highlight-outline); font-weight: bold; margin-left: 15px;}
+#status-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-width: 150px;
+}
+#bot-level-indicator {
+    font-size: 0.78em;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 999px;
+    color: var(--text-color);
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+#check-indicator { color: var(--check-highlight-outline); font-weight: bold; margin-left: auto;}
+
+#toast-container {
+    position: fixed;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: min(92vw, 440px);
+    pointer-events: none;
+}
+.toast {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    color: #f3f6ff;
+    background: rgba(22, 25, 33, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+    text-align: center;
+    font-size: 0.9em;
+    opacity: 0;
+    transform: translateY(-8px);
+    animation: toastIn 140ms ease-out forwards;
+}
+.toast.fade-out {
+    animation: toastOut 160ms ease-in forwards;
+}
+@keyframes toastIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes toastOut {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(-6px); }
+}
 
 .captured-pieces {
     min-height: 30px; display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
@@ -345,7 +418,11 @@ i { margin-right: 0.4em; }
     .top-bar { flex-direction: column-reverse; align-items: stretch; gap: 5px; }
     .bottom-bar { flex-direction: column; align-items: stretch; gap: 5px; }
     #controls-bar { justify-content: space-around; }
-    #status-bar { width: 100%; margin-left: 0; text-align: center; justify-content: center; gap: 15px;}
+    #status-bar { width: 100%; margin-left: 0; text-align: center; justify-content: center; gap: 10px;}
+    #status-main { justify-content: center; flex: 1 1 auto; }
+    #check-indicator { margin-left: 0; }
+    #toast-container { top: 10px; width: min(96vw, 420px); }
+    .toast { font-size: 0.84em; padding: 8px 10px; }
     .captured-pieces { justify-content: center; min-height: 25px; }
     .captured-pieces .captured-piece-icon { width: 18px; height: 18px; }
 

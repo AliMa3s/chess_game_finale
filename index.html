@@ -15,6 +15,23 @@
     <div id="splash-screen">
         <h1><i class="fas fa-chess"></i> Local Chess</h1>
         <div class="settings">
+            <!-- Game Mode -->
+            <div class="setting-option">
+                <label><i class="fas fa-user-friends"></i> Mode:</label>
+                <div>
+                    <button class="theme-btn mode-btn" data-mode="local">Local 2P</button>
+                    <button class="theme-btn mode-btn" data-mode="bot">Vs Bot</button>
+                </div>
+            </div>
+            <div id="difficulty-setting" class="setting-option option-hidden">
+                <label for="bot-difficulty"><i class="fas fa-brain"></i> Bot Level:</label>
+                <select id="bot-difficulty">
+                    <option value="easy">Easy</option>
+                    <option value="medium">Medium</option>
+                    <option value="hard">Hard</option>
+                    <option value="expert">Expert</option>
+                </select>
+            </div>
             <!-- Theme Selection -->
             <div class="setting-option">
                 <label><i class="fas fa-palette"></i> Theme:</label>
@@ -34,6 +51,15 @@
         <button id="start-game-btn" class="btn btn-primary">
             <i class="fas fa-play"></i> Start Game
         </button>
+        <a
+            id="support-link"
+            class="btn btn-primary"
+            href="https://www.paypal.com/paypalme/alimaes"
+            target="_blank"
+            rel="noopener noreferrer"
+        >
+            <i class="fas fa-heart"></i> Support Me
+        </a>
     </div>
 
     <!-- Main Game Area -->
@@ -103,7 +129,10 @@
                 <!-- White captures black pieces -->
             </div>
             <div id="status-bar">
-                <span id="turn-indicator">White's Turn</span>
+                <div id="status-main">
+                    <span id="turn-indicator">White's Turn</span>
+                    <span id="bot-level-indicator" class="option-hidden"></span>
+                </div>
                 <span id="check-indicator"></span>
             </div>
         </div>
@@ -123,6 +152,8 @@
         </div>
     </div>
 
+    <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+    <script src="bot-ai.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
