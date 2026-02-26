@@ -32,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // --- Game State ---
+    let gameState = null;
     let board = [];
     let currentPlayer = 'w';
     let selectedSquare = null; // Stores { row, col, element } (element is the piece div)
@@ -45,11 +46,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let capturedWhitePieces = [];
     let capturedBlackPieces = [];
     let moveHistory = [];
-    let currentMoveNumber = 1;
     let lastMove = null; // Stores { fromRow, fromCol, toRow, toCol }
     let gameMode = 'local'; // local | bot
     let botDifficulty = 'easy'; // easy | medium | hard | expert
     let botMoveTimeoutId = null;
+    let botTurnToken = 0;
     let positionRepetitionCounts = {};
     let lastBotToastText = '';
 
@@ -93,8 +94,20 @@ document.addEventListener('DOMContentLoaded', () => {
         hard: ['Bot mood: Hard and serious', 'Bot mood: Hard, no free moves'],
         expert: ['Bot mood: Expert, full calculate mode', 'Bot mood: Expert, razor sharp']
     };
-    const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-    const ranks = ['8', '7', '6', '5', '4', '3', '2', '1']; // Rank 1 is row 7
+    function ensureChessLogicLoaded() {
+        if (!window.ChessLogic) {
+            throw new Error('ChessLogic is required but not loaded.');
+        }
+    }
+
+    function syncStateRefs() {
+        if (!gameState) return;
+        board = gameState.board;
+        currentPlayer = gameState.currentPlayer;
+        whiteKingPos = gameState.whiteKingPos;
+        blackKingPos = gameState.blackKingPos;
+        positionRepetitionCounts = gameState.positionRepetitionCounts;
+    }
 
     // --- Audio Setup ---
     const sounds = {
@@ -136,9 +149,9 @@ document.addEventListener('DOMContentLoaded', () => {
         gameMode = modeName === 'bot' ? 'bot' : 'local';
         modeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === gameMode));
         difficultySetting.classList.toggle('option-hidden', gameMode !== 'bot');
-        if (gameMode !== 'bot') {
-            clearBotMoveTimeout();
-            boardContainer.classList.remove('interaction-disabled');
+        invalidateBotTurn();
+        if (gameMode === 'bot' && !gameContainer.classList.contains('hidden') && shouldBotPlay()) {
+            scheduleBotMove();
         }
         updateBotLevelIndicator();
         localStorage.setItem('chessGameMode', gameMode);
@@ -254,67 +267,49 @@ document.addEventListener('DOMContentLoaded', () => {
             botMoveTimeoutId = null;
         }
     }
-    function getPositionKey(sideToMove = currentPlayer) {
-        const rows = [];
-        for (let r = 0; r < 8; r++) {
-            rows.push(board[r].map(cell => cell || '..').join(','));
-        }
-        return `${sideToMove}|${rows.join('/')}`;
-    }
-    function resetPositionHistory() {
-        positionRepetitionCounts = {};
+    function invalidateBotTurn() {
+        botTurnToken++;
+        clearBotMoveTimeout();
+        boardContainer.classList.remove('interaction-disabled');
     }
     function recordCurrentPosition() {
-        const key = getPositionKey(currentPlayer);
-        positionRepetitionCounts[key] = (positionRepetitionCounts[key] || 0) + 1;
+        if (!gameState) return;
+        window.ChessLogic.recordCurrentPosition(gameState);
+        syncStateRefs();
     }
     function createStateSnapshot() {
-        return {
-            board: board.map(row => row.slice()),
-            whiteKingPos: { ...whiteKingPos },
-            blackKingPos: { ...blackKingPos }
-        };
+        if (!gameState) return null;
+        return window.ChessLogic.createStateSnapshot(gameState);
     }
     function restoreStateSnapshot(snapshot) {
-        board = snapshot.board.map(row => row.slice());
-        whiteKingPos = { ...snapshot.whiteKingPos };
-        blackKingPos = { ...snapshot.blackKingPos };
+        if (!gameState || !snapshot) return;
+        window.ChessLogic.restoreStateSnapshot(gameState, snapshot);
+        syncStateRefs();
     }
     function applySimulatedMove(move) {
-        const movingPiece = board[move.fromRow][move.fromCol];
-        board[move.toRow][move.toCol] = movingPiece;
-        board[move.fromRow][move.fromCol] = null;
-        if (movingPiece === 'wK') whiteKingPos = { row: move.toRow, col: move.toCol };
-        if (movingPiece === 'bK') blackKingPos = { row: move.toRow, col: move.toCol };
-        if (movingPiece && movingPiece[1] === 'P' && (move.toRow === 0 || move.toRow === 7)) {
-            const promotionChoice = move.promotionChoice || 'Q';
-            board[move.toRow][move.toCol] = movingPiece[0] + promotionChoice;
-        }
+        if (!gameState) return;
+        window.ChessLogic.applyMove(gameState, move, {
+            switchPlayer: true,
+            recordPosition: false
+        });
+        syncStateRefs();
     }
     function getAllLegalMovesWithContext(playerColor) {
-        const allMoves = [];
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                const piece = board[r][c];
-                if (!piece || piece[0] !== playerColor) continue;
-                const legal = calculateLegalMoves(r, c);
-                legal.forEach(move => {
-                    const moveDetails = {
-                        fromRow: r,
-                        fromCol: c,
-                        toRow: move.row,
-                        toCol: move.col,
-                        piece,
-                        captured: board[move.row][move.col]
-                    };
-                    if (piece[1] === 'P' && (move.row === 0 || move.row === 7)) {
-                        moveDetails.promotionChoice = 'Q';
-                    }
-                    allMoves.push(moveDetails);
-                });
-            }
+        if (!gameState) return [];
+        return window.ChessLogic.getAllLegalMovesWithContext(gameState, playerColor);
+    }
+    function getBotRepetitionCounts() {
+        const normalized = {};
+        const source = positionRepetitionCounts || {};
+        for (const [fullKey, seen] of Object.entries(source)) {
+            const parts = fullKey.split('|');
+            if (parts.length < 4) continue;
+            const side = parts[0];
+            const rows = parts.slice(3).join('|');
+            const simpleKey = `${side}|${rows}`;
+            normalized[simpleKey] = (normalized[simpleKey] || 0) + seen;
         }
-        return allMoves;
+        return normalized;
     }
     function chooseBotMove() {
         const legalMoves = getAllLegalMovesWithContext(botColor);
@@ -325,7 +320,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.ChessBotAI.chooseMove({
             difficulty: botDifficulty,
             botColor: botColor,
-            repetitionCounts: positionRepetitionCounts,
+            repetitionCounts: getBotRepetitionCounts(),
             adapters: {
                 getAllLegalMovesWithContext,
                 isInCheck,
@@ -341,24 +336,34 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     function scheduleBotMove() {
+        if (!shouldBotPlay()) return;
         clearBotMoveTimeout();
+        const turnToken = ++botTurnToken;
         boardContainer.classList.add('interaction-disabled');
         const thinkingLine = getBotThinkingPhrase();
         const thinkTime = getBotThinkTime();
         showToast(thinkingLine, Math.max(thinkTime + 260, 900));
         botMoveTimeoutId = setTimeout(() => {
             botMoveTimeoutId = null;
+            if (turnToken !== botTurnToken) {
+                boardContainer.classList.remove('interaction-disabled');
+                return;
+            }
             if (!shouldBotPlay()) {
                 boardContainer.classList.remove('interaction-disabled');
                 return;
             }
             const botMove = chooseBotMove();
+            if (turnToken !== botTurnToken) {
+                boardContainer.classList.remove('interaction-disabled');
+                return;
+            }
             if (!botMove) {
                 checkGameStatus();
                 boardContainer.classList.remove('interaction-disabled');
                 return;
             }
-            makeMove(botMove);
+            makeMove(botMove, { source: 'bot' });
             if (!gameIsOver && !shouldBotPlay()) {
                 boardContainer.classList.remove('interaction-disabled');
             }
@@ -367,25 +372,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Navigation ---
     function goToHomeScreen() {
-        clearBotMoveTimeout();
+        invalidateBotTurn();
         gameContainer.classList.add('hidden'); splashScreen.classList.remove('hidden');
         gameOverMessage.classList.add('hidden'); promotionModal.classList.add('hidden');
-        boardContainer.classList.remove('interaction-disabled');
         gameIsOver = false; selectedSquare = null; legalMoves = [];
     }
 
     // --- Initialization ---
     function setupBoard() {
-        clearBotMoveTimeout();
-        board = [
-            ['bR', 'bN', 'bB', 'bQ', 'bK', 'bB', 'bN', 'bR'], ['bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP'],
-            Array(8).fill(null), Array(8).fill(null), Array(8).fill(null), Array(8).fill(null),
-            ['wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP'], ['wR', 'wN', 'wB', 'wQ', 'wK', 'wB', 'wN', 'wR']
-        ];
-        whiteKingPos = { row: 7, col: 4 }; blackKingPos = { row: 0, col: 4 };
-        currentPlayer = 'w'; selectedSquare = null; legalMoves = []; gameIsOver = false;
-        capturedWhitePieces = []; capturedBlackPieces = []; moveHistory = []; currentMoveNumber = 1;
-        lastMove = null; promotionState.active = false;
+        invalidateBotTurn();
+        ensureChessLogicLoaded();
+        gameState = window.ChessLogic.createInitialState();
+        syncStateRefs();
+
+        selectedSquare = null;
+        legalMoves = [];
+        gameIsOver = false;
+        capturedWhitePieces = [];
+        capturedBlackPieces = [];
+        moveHistory = [];
+        lastMove = null;
+        promotionState.active = false;
 
         updateTurnIndicator();
         clearHighlights(); // Clears selected/legal moves state and styles
@@ -400,7 +407,6 @@ document.addEventListener('DOMContentLoaded', () => {
         gameOverMessage.classList.add('hidden'); promotionModal.classList.add('hidden');
         boardContainer.classList.remove('interaction-disabled');
         updateBotLevelIndicator();
-        resetPositionHistory();
         recordCurrentPosition();
         playSound('start');
         if (shouldBotPlay()) scheduleBotMove();
@@ -552,7 +558,9 @@ document.addEventListener('DOMContentLoaded', () => {
          moves.forEach(move => {
             const moveSquare = boardElement.querySelector(`.square[data-row='${move.row}'][data-col='${move.col}']`);
             if (moveSquare) {
-                const indicatorClass = board[move.row][move.col] ? 'legal-capture-indicator' : 'legal-move-indicator';
+                const indicatorClass = (move.captured || move.isEnPassant || board[move.row][move.col])
+                    ? 'legal-capture-indicator'
+                    : 'legal-move-indicator';
                 moveSquare.classList.add(indicatorClass);
             }
         });
@@ -569,15 +577,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const clickedPieceColor = clickedPiece ? clickedPiece[0] : null;
 
         if (selectedSquare) { // A piece is already selected
-            const isValidMove = legalMoves.some(move => move.row === row && move.col === col);
-            if (isValidMove) { // Clicked on a legal move square
+            const selectedMove = legalMoves.find(move => move.row === row && move.col === col);
+            if (selectedMove) { // Clicked on a legal move square
                 const moveDetails = {
                     fromRow: selectedSquare.row, fromCol: selectedSquare.col,
                     toRow: row, toCol: col,
                     piece: board[selectedSquare.row][selectedSquare.col],
-                    captured: board[row][col]
+                    captured: selectedMove.captured || board[row][col],
+                    isEnPassant: !!selectedMove.isEnPassant,
+                    isCastling: !!selectedMove.isCastling,
+                    castleSide: selectedMove.castleSide || null
                 };
-                makeMove(moveDetails);
+                makeMove(moveDetails, { source: 'human' });
             } else if (clickedPieceColor === currentPlayer && (row !== selectedSquare.row || col !== selectedSquare.col)) {
                 // Clicked on a different piece of the same color - switch selection
                 selectPiece(row, col); playSound('select');
@@ -599,178 +610,149 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Game Logic ---
-    function makeMove(moveDetails) {
-        // Update board state
-        board[moveDetails.toRow][moveDetails.toCol] = moveDetails.piece;
-        board[moveDetails.fromRow][moveDetails.fromCol] = null;
-        // Update King pos
-        if (moveDetails.piece === 'wK') whiteKingPos = { row: moveDetails.toRow, col: moveDetails.toCol };
-        if (moveDetails.piece === 'bK') blackKingPos = { row: moveDetails.toRow, col: moveDetails.toCol };
-        // Handle captures
-        if (moveDetails.captured) {
-            if (moveDetails.captured[0] === 'w') capturedWhitePieces.push(moveDetails.captured);
-            else capturedBlackPieces.push(moveDetails.captured);
-            renderCapturedPieces(); playSound('capture');
-        } else { playSound('move'); }
+    function makeMove(moveDetails, options = {}) {
+        if (!gameState) return;
+        const source = options.source || 'human';
+        if (source === 'bot' && !shouldBotPlay()) return;
+        if (source !== 'bot' && shouldBotPlay()) return;
 
-        // Check for Pawn Promotion
-        const promotionRank = moveDetails.piece[0] === 'w' ? 0 : 7;
-        if (moveDetails.piece[1] === 'P' && moveDetails.toRow === promotionRank) {
-             if (moveDetails.promotionChoice) {
-                 board[moveDetails.toRow][moveDetails.toCol] = moveDetails.piece[0] + moveDetails.promotionChoice;
-                 moveDetails.promotion = moveDetails.promotionChoice;
-                 playSound('promote');
-                 finalizeMove(moveDetails);
-                 return;
-             }
-             // Update last move state *before* initiating promotion
-             lastMove = { fromRow: moveDetails.fromRow, fromCol: moveDetails.fromCol, toRow: moveDetails.toRow, toCol: moveDetails.toCol };
-             // Don't render here, let initiatePromotion handle showing modal over existing state
-             initiatePromotion(moveDetails.toRow, moveDetails.toCol, moveDetails.piece[0], moveDetails);
-        } else {
-            finalizeMove(moveDetails); // Directly finalize non-promoting moves
+        const movingPiece = board[moveDetails.fromRow][moveDetails.fromCol];
+        if (!movingPiece) return;
+
+        const promotionRank = movingPiece[0] === 'w' ? 0 : 7;
+        const isPromotionMove = movingPiece[1] === 'P' && moveDetails.toRow === promotionRank;
+        if (isPromotionMove && !moveDetails.promotionChoice) {
+            initiatePromotion(moveDetails.toRow, moveDetails.toCol, movingPiece[0], moveDetails);
+            return;
         }
+
+        finalizeMove(moveDetails);
     }
 
     function initiatePromotion(row, col, color, originalMoveDetails) {
         promotionState = {
             active: true, row: row, col: col, color: color,
             callback: (promotedPieceType) => {
-                board[row][col] = color + promotedPieceType; playSound('promote');
-                originalMoveDetails.promotion = promotedPieceType; // Update details for SAN
+                originalMoveDetails.promotionChoice = promotedPieceType;
                 promotionModal.classList.add('hidden'); promotionState.active = false;
                 finalizeMove(originalMoveDetails); // Resume game flow
             }
         };
         renderPromotionModalPieces();
         promotionModal.classList.remove('hidden');
-        console.log('Promotion initiated for', color, 'at', row, col);
     }
 
     function finalizeMove(moveDetails) {
-          // --- FIX: Clear previous last move highlights FIRST ---
-          if (lastMove) {
-              const prevFromSquare = boardElement.querySelector(`.square[data-row='${lastMove.fromRow}'][data-col='${lastMove.fromCol}']`);
-              const prevToSquare = boardElement.querySelector(`.square[data-row='${lastMove.toRow}'][data-col='${lastMove.toCol}']`);
-              if (prevFromSquare) prevFromSquare.classList.remove('last-move-from');
-              if (prevToSquare) prevToSquare.classList.remove('last-move-to');
-          }
+        if (!gameState) return;
 
-          // Update lastMove state *before* rendering
-          lastMove = { fromRow: moveDetails.fromRow, fromCol: moveDetails.fromCol, toRow: moveDetails.toRow, toCol: moveDetails.toCol };
+        if (lastMove) {
+            const prevFromSquare = boardElement.querySelector(`.square[data-row='${lastMove.fromRow}'][data-col='${lastMove.fromCol}']`);
+            const prevToSquare = boardElement.querySelector(`.square[data-row='${lastMove.toRow}'][data-col='${lastMove.toCol}']`);
+            if (prevFromSquare) prevFromSquare.classList.remove('last-move-from');
+            if (prevToSquare) prevToSquare.classList.remove('last-move-to');
+        }
 
-          // Store Move for History
-          const moveDataForHistory = { ...moveDetails, turn: currentPlayer, moveNumber: currentMoveNumber };
-          moveDataForHistory.san = moveToSAN(moveDataForHistory);
-          moveHistory.push(moveDataForHistory);
+        const stateBeforeMove = window.ChessLogic.createStateSnapshot(gameState);
+        const moveResult = window.ChessLogic.applyMove(gameState, moveDetails, {
+            switchPlayer: true,
+            recordPosition: true
+        });
+        if (!moveResult) return;
 
-          // Switch Player & Clear Selections
-          switchPlayer();
-          recordCurrentPosition();
-          clearHighlights(); // Clears .selected, .legal-* indicators
-          selectedSquare = null; legalMoves = [];
+        syncStateRefs();
+        lastMove = {
+            fromRow: moveResult.fromRow,
+            fromCol: moveResult.fromCol,
+            toRow: moveResult.toRow,
+            toCol: moveResult.toCol
+        };
 
-          // Render Board (Applies new lastMove highlight via lastMove state)
-          renderBoard();
+        if (moveResult.captured) {
+            if (moveResult.captured[0] === 'w') capturedWhitePieces.push(moveResult.captured);
+            else capturedBlackPieces.push(moveResult.captured);
+            renderCapturedPieces();
+        }
 
-          // Check Game Status (updates check indicator, SAN suffix, game over state)
-          checkGameStatus();
+        if (moveResult.promotion) playSound('promote');
+        else if (moveResult.captured) playSound('capture');
+        else playSound('move');
 
-          // Update History Display (shows final SAN)
-          renderMoveHistory();
+        const moveDataForHistory = { ...moveResult };
+        moveDataForHistory.san = window.ChessLogic.moveToSAN(stateBeforeMove, moveResult, gameState);
+        moveHistory.push(moveDataForHistory);
 
-          // Increment Move Number
-          if (currentPlayer === 'w') { currentMoveNumber++; }
+        updateTurnIndicator();
+        clearHighlights();
+        selectedSquare = null;
+        legalMoves = [];
+        renderBoard();
+        checkGameStatus();
+        renderMoveHistory();
 
-          if (shouldBotPlay()) {
-              scheduleBotMove();
-          }
-      }
-
-    function switchPlayer() { currentPlayer = currentPlayer === 'w' ? 'b' : 'w'; updateTurnIndicator(); }
-    function updateTurnIndicator() { turnIndicator.textContent = `${currentPlayer === 'w' ? 'White' : 'Black'}'s Turn`; }
-
-    // --- Move Calculation & Validation (Keep ALL helper functions: calculateLegalMoves, isValid, etc.) ---
-    function calculateLegalMoves(row, col) {
-        const piece = board[row][col]; if (!piece) return [];
-        const color = piece[0]; const type = piece[1]; let potentialMoves = [];
-        switch (type) { case 'P': potentialMoves = getPawnMoves(row, col, color); break; case 'R': potentialMoves = getRookMoves(row, col, color); break; case 'N': potentialMoves = getKnightMoves(row, col, color); break; case 'B': potentialMoves = getBishopMoves(row, col, color); break; case 'Q': potentialMoves = getQueenMoves(row, col, color); break; case 'K': potentialMoves = getKingMoves(row, col, color); break; }
-        const legalMovesResult = potentialMoves.filter(move => {
-            const originalDestPiece = board[move.row][move.col]; const movingPiece = board[row][col];
-            board[move.row][move.col] = movingPiece; board[row][col] = null;
-            let originalKingPos = null; let kingMoved = false;
-            if (type === 'K') { kingMoved = true; originalKingPos = color === 'w' ? { ...whiteKingPos } : { ...blackKingPos }; if(color === 'w') whiteKingPos = { row: move.row, col: move.col }; else blackKingPos = { row: move.row, col: move.col }; }
-            const check = isInCheck(color);
-            board[row][col] = movingPiece; board[move.row][move.col] = originalDestPiece;
-             if (kingMoved && originalKingPos) { if(color === 'w') whiteKingPos = originalKingPos; else blackKingPos = originalKingPos; }
-            return !check;
-        }); return legalMovesResult;
-     }
-    function isValid(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
-    function getPieceColor(r, c) { if (!isValid(r, c) || !board[r][c]) return null; return board[r][c][0]; }
-    function addMoveIfValid(moves, r, c, targetR, targetC, color) { if (isValid(targetR, targetC)) { const targetPiece = board[targetR][targetC]; const targetColor = targetPiece ? targetPiece[0] : null; if (targetColor !== color) { moves.push({ row: targetR, col: targetC }); } return targetColor === null; } return false; }
-    function getPawnMoves(r, c, color) { const moves = []; const direction = color === 'w' ? -1 : 1; const startRow = color === 'w' ? 6 : 1; const oneForwardR = r + direction; if (isValid(oneForwardR, c) && !board[oneForwardR][c]) { moves.push({ row: oneForwardR, col: c }); const twoForwardR = r + 2 * direction; if (r === startRow && isValid(twoForwardR, c) && !board[twoForwardR][c]) { moves.push({ row: twoForwardR, col: c }); } } const captureOffsets = [-1, 1]; captureOffsets.forEach(offset => { const targetC = c + offset; const targetR = r + direction; if (isValid(targetR, targetC) && board[targetR][targetC] && getPieceColor(targetR, targetC) !== color) { moves.push({ row: targetR, col: targetC }); } }); /* TODO: Add En Passant */ return moves; }
-    function getSlidingMoves(r, c, color, directions) { const moves = []; directions.forEach(([dr, dc]) => { for (let i = 1; ; i++) { const targetR = r + i * dr; const targetC = c + i * dc; if (!isValid(targetR, targetC)) break; const targetPiece = board[targetR][targetC]; const targetColor = targetPiece ? targetPiece[0] : null; if (targetColor === color) break; moves.push({ row: targetR, col: targetC }); if (targetColor !== null) break; } }); return moves; }
-    function getRookMoves(r, c, color) { return getSlidingMoves(r, c, color, [[-1, 0], [1, 0], [0, -1], [0, 1]]); }
-    function getBishopMoves(r, c, color) { return getSlidingMoves(r, c, color, [[-1, -1], [-1, 1], [1, -1], [1, 1]]); }
-    function getQueenMoves(r, c, color) { return [...getRookMoves(r, c, color), ...getBishopMoves(r, c, color)]; }
-    function getKnightMoves(r, c, color) { const moves = []; const offsets = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]]; offsets.forEach(([dr, dc]) => { const targetR = r + dr; const targetC = c + dc; if (isValid(targetR, targetC)) { const targetColor = getPieceColor(targetR, targetC); if (targetColor !== color) { moves.push({ row: targetR, col: targetC }); } } }); return moves; }
-    function getKingMoves(r, c, color) { const moves = []; for (let dr = -1; dr <= 1; dr++) { for (let dc = -1; dc <= 1; dc++) { if (dr === 0 && dc === 0) continue; const targetR = r + dr; const targetC = c + dc; if (isValid(targetR, targetC)) { const targetColor = getPieceColor(targetR, targetC); if (targetColor !== color) { moves.push({ row: targetR, col: targetC }); } } } } /* TODO: Add Castling */ return moves; }
-    function isSquareAttacked(r, c, attackerColor) { for (let row = 0; row < 8; row++) { for (let col = 0; col < 8; col++) { const piece = board[row][col]; if (piece && piece[0] === attackerColor) { const potentialMoves = getPotentialMovesForPiece(row, col, attackerColor); if (potentialMoves.some(move => move.row === r && move.col === c)) { return true; } } } } return false; }
-    function getPotentialMovesForPiece(r, c, color) { const piece = board[r][c]; if (!piece || piece[0] !== color) return []; const type = piece[1]; switch (type) { case 'P': const attackMoves = []; const direction = color === 'w' ? -1 : 1; const attackOffsets = [-1, 1]; attackOffsets.forEach(offset => { const targetC = c + offset; const targetR = r + direction; if (isValid(targetR, targetC)) { attackMoves.push({ row: targetR, col: targetC }); } }); return attackMoves; case 'R': return getSlidingMoves(r, c, color, [[-1, 0], [1, 0], [0, -1], [0, 1]]); case 'N': return getKnightMoves(r, c, color); case 'B': return getSlidingMoves(r, c, color, [[-1, -1], [-1, 1], [1, -1], [1, 1]]); case 'Q': return getQueenMoves(r, c, color); case 'K': const kingAttackMoves = []; for (let dr = -1; dr <= 1; dr++) { for (let dc = -1; dc <= 1; dc++) { if (dr === 0 && dc === 0) continue; if (isValid(r + dr, c + dc)) { kingAttackMoves.push({row: r + dr, col: c + dc}) } } } return kingAttackMoves; default: return []; } }
-    function isInCheck(playerColor) { const kingPos = playerColor === 'w' ? whiteKingPos : blackKingPos; const opponentColor = playerColor === 'w' ? 'b' : 'w'; return isSquareAttacked(kingPos.row, kingPos.col, opponentColor); }
-    function getAllLegalMoves(playerColor) { let allMoves = []; for (let r = 0; r < 8; r++) { for (let c = 0; c < 8; c++) { const piece = board[r][c]; if (piece && piece[0] === playerColor) { const moves = calculateLegalMoves(r, c); allMoves.push(...moves); } } } return allMoves; }
-
-    // --- SAN Conversion ---
-    function getAlgebraicSquare(row, col) { if (row < 0 || row > 7 || col < 0 || col > 7) return "??"; return files[col] + ranks[row]; }
-    function moveToSAN(moveData) {
-        const { fromRow, fromCol, toRow, toCol, piece, captured, promotion } = moveData;
-        if (!piece) return "InvalidMove"; const pieceType = piece[1]; let san = '';
-        if (pieceType === 'P') { if (captured) { san += files[fromCol] + 'x'; } san += getAlgebraicSquare(toRow, toCol); if (promotion) { san += '=' + promotion; } }
-        else { san += pieceType; /* TODO: Add disambiguation */ if (captured) { san += 'x'; } san += getAlgebraicSquare(toRow, toCol); }
-        return san;
+        if (shouldBotPlay()) {
+            scheduleBotMove();
+        }
     }
 
-    // --- Check/Checkmate/Stalemate Logic ---
+    function updateTurnIndicator() { turnIndicator.textContent = `${currentPlayer === 'w' ? 'White' : 'Black'}'s Turn`; }
+
+    // --- Move Calculation & Validation ---
+    function calculateLegalMoves(row, col) {
+        if (!gameState) return [];
+        return window.ChessLogic.calculateLegalMoves(gameState, row, col);
+    }
+    function isInCheck(playerColor) {
+        if (!gameState) return false;
+        return window.ChessLogic.isInCheck(gameState, playerColor);
+    }
+    function getAllLegalMoves(playerColor) {
+        if (!gameState) return [];
+        return window.ChessLogic.getAllLegalMovesWithContext(gameState, playerColor);
+    }
+
+    // --- Check/Checkmate/Stalemate/Draw Logic ---
     function checkGameStatus() {
-        const possibleMoves = getAllLegalMoves(currentPlayer);
-        let endMessage = ''; let isCheck = false; let isCheckmate = false; let isStalemate = false;
-        if (possibleMoves.length === 0) {
+        if (!gameState) return;
+        const status = window.ChessLogic.getGameStatus(gameState);
+
+        if (status.isGameOver) {
             gameIsOver = true;
-            if (isInCheck(currentPlayer)) { isCheckmate = true; endMessage = `${currentPlayer === 'w' ? 'Black' : 'White'} wins by Checkmate!`; playSound('end'); }
-            else { isStalemate = true; endMessage = `Stalemate! It's a draw.`; playSound('end'); }
-            winnerMessage.textContent = endMessage; gameOverMessage.classList.remove('hidden');
-            boardContainer.classList.add('interaction-disabled'); checkIndicator.textContent = '';
-            // Clear last move highlight visually on game end
-             if (lastMove) { // Check if lastMove exists before trying to query
-                 const fromSq = boardElement.querySelector(`.square[data-row='${lastMove.fromRow}'][data-col='${lastMove.fromCol}']`);
-                 const toSq = boardElement.querySelector(`.square[data-row='${lastMove.toRow}'][data-col='${lastMove.toCol}']`);
-                 if(fromSq) fromSq.classList.remove('last-move-from');
-                 if(toSq) toSq.classList.remove('last-move-to');
-             }
-             lastMove = null; // Clear state too
-        } else {
-            gameIsOver = false; isCheck = isInCheck(currentPlayer);
-            if (isCheck) { playSound('check'); }
-            highlightKingInCheck();
-            gameOverMessage.classList.add('hidden'); boardContainer.classList.remove('interaction-disabled');
-        }
-        // Update SAN suffix for the *last* move in history
-        if (moveHistory.length > 0) {
-            const lastRecordedMove = moveHistory[moveHistory.length - 1];
-            // Check if the status applies to the *move just made* by the previous player
-            if (lastRecordedMove.turn !== currentPlayer || gameIsOver) {
-                let sanChanged = false; const currentSan = lastRecordedMove.san;
-                let newSan = currentSan.replace(/[+#]$/, ''); // Remove existing suffix first
-                if (isCheckmate) { if (!currentSan.endsWith('#')) { newSan += '#'; sanChanged = true; } }
-                else if (isCheck) { if (!currentSan.endsWith('+')) { newSan += '+'; sanChanged = true; } }
-                else if (currentSan.match(/[+#]$/)) { sanChanged = true; } // Remove if no longer check/mate
-                if (sanChanged) {
-                    lastRecordedMove.san = newSan;
-                    // Don't re-render history here, finalizeMove handles it
-                }
+            let endMessage = '';
+            if (status.reason === 'checkmate') {
+                endMessage = `${status.winner === 'w' ? 'White' : 'Black'} wins by Checkmate!`;
+            } else if (status.reason === 'stalemate') {
+                endMessage = `Stalemate! It's a draw.`;
+            } else if (status.reason === 'threefold') {
+                endMessage = `Draw by threefold repetition.`;
+            } else if (status.reason === 'fifty-move') {
+                endMessage = `Draw by the 50-move rule.`;
+            } else if (status.reason === 'insufficient-material') {
+                endMessage = `Draw by insufficient material.`;
+            } else {
+                endMessage = `Game drawn.`;
             }
+
+            winnerMessage.textContent = endMessage;
+            gameOverMessage.classList.remove('hidden');
+            boardContainer.classList.add('interaction-disabled');
+            checkIndicator.textContent = '';
+
+            if (lastMove) {
+                const fromSq = boardElement.querySelector(`.square[data-row='${lastMove.fromRow}'][data-col='${lastMove.fromCol}']`);
+                const toSq = boardElement.querySelector(`.square[data-row='${lastMove.toRow}'][data-col='${lastMove.toCol}']`);
+                if (fromSq) fromSq.classList.remove('last-move-from');
+                if (toSq) toSq.classList.remove('last-move-to');
+            }
+            lastMove = null;
+            playSound('end');
+            return;
         }
+
+        gameIsOver = false;
+        if (status.isCheck) playSound('check');
+        highlightKingInCheck();
+        gameOverMessage.classList.add('hidden');
+        boardContainer.classList.remove('interaction-disabled');
     }
 
     // --- UI Interaction & Event Listeners ---
