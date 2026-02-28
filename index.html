@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Simple Chess</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
@@ -13,54 +13,105 @@
 
     <!-- Splash Screen -->
     <div id="splash-screen">
-        <h1><i class="fas fa-chess"></i> Local Chess</h1>
-        <div class="settings">
-            <!-- Game Mode -->
-            <div class="setting-option">
-                <label><i class="fas fa-user-friends"></i> Mode:</label>
-                <div>
-                    <button class="theme-btn mode-btn" data-mode="local">Local 2P</button>
-                    <button class="theme-btn mode-btn" data-mode="bot">Vs Bot</button>
+        <div class="splash-shell">
+            <div class="splash-hero" aria-hidden="true">
+                <div class="hero-orb hero-orb-a"></div>
+                <div class="hero-orb hero-orb-b"></div>
+                <div class="hero-board">
+                    <span></span><span></span><span></span><span></span>
+                    <span></span><span></span><span></span><span></span>
+                    <span></span><span></span><span></span><span></span>
+                    <span></span><span></span><span></span><span></span>
+                </div>
+                <i class="fas fa-chess-knight hero-piece"></i>
+            </div>
+
+            <h1><i class="fas fa-chess"></i> Local Chess</h1>
+            <p class="splash-subtitle">Set up your match and start playing fast.</p>
+
+            <div class="settings settings-primary">
+                <h2 class="settings-title">Game Setup</h2>
+                <div class="setting-option">
+                    <label><i class="fas fa-user-friends"></i> Mode:</label>
+                    <div>
+                        <button class="theme-btn mode-btn" data-mode="local">Local 2P</button>
+                        <button class="theme-btn mode-btn" data-mode="bot">Vs Bot</button>
+                    </div>
+                </div>
+                <div id="difficulty-setting" class="setting-option option-hidden">
+                    <label for="bot-difficulty"><i class="fas fa-brain"></i> Bot Level:</label>
+                    <select id="bot-difficulty">
+                        <option value="easy">Easy</option>
+                        <option value="medium">Medium</option>
+                        <option value="hard">Hard</option>
+                        <option value="expert">Expert</option>
+                    </select>
+                </div>
+                <div class="setting-option">
+                    <label for="time-control"><i class="fas fa-clock"></i> Time:</label>
+                    <div class="control-stack">
+                        <select id="time-control" aria-describedby="time-help">
+                            <option value="none">No Clock</option>
+                            <option value="blitz-3">Blitz 3|0</option>
+                            <option value="rapid-10">Rapid 10|0</option>
+                            <option value="rapid-15">Rapid 15|0</option>
+                        </select>
+                        <small id="time-help" class="setting-help">Each side gets this total time. No increment.</small>
+                    </div>
                 </div>
             </div>
-            <div id="difficulty-setting" class="setting-option option-hidden">
-                <label for="bot-difficulty"><i class="fas fa-brain"></i> Bot Level:</label>
-                <select id="bot-difficulty">
-                    <option value="easy">Easy</option>
-                    <option value="medium">Medium</option>
-                    <option value="hard">Hard</option>
-                    <option value="expert">Expert</option>
-                </select>
-            </div>
-            <!-- Theme Selection -->
-            <div class="setting-option">
-                <label><i class="fas fa-palette"></i> Theme:</label>
-                <div>
-                    <button class="theme-btn" data-theme="default">Default</button>
-                    <button class="theme-btn" data-theme="classic">Classic B/W</button>
-                    <button class="theme-btn" data-theme="forest">Forest</button>
-                    <button class="theme-btn" data-theme="ocean">Ocean</button>
-                    <button class="theme-btn" data-theme="dark-mode">Dark</button>
+
+            <button id="open-appearance-btn" class="btn btn-tertiary">
+                <i class="fas fa-sliders-h"></i> Appearance & Extras
+            </button>
+
+            <button id="start-game-btn" class="btn btn-primary">
+                <i class="fas fa-play"></i> Start Game
+            </button>
+            <a
+                id="support-link"
+                href="https://www.paypal.com/paypalme/alimaes"
+                target="_blank"
+                rel="noopener noreferrer"
+            >
+                <i class="fas fa-heart"></i> Support this project
+            </a>
+
+            <div id="appearance-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="appearance-title">
+                <div class="appearance-modal-backdrop"></div>
+                <div class="appearance-modal-panel">
+                    <div class="appearance-modal-header">
+                        <h3 id="appearance-title"><i class="fas fa-sliders-h"></i> Appearance & Extras</h3>
+                        <button id="close-appearance-btn" class="btn btn-icon" type="button" aria-label="Close appearance settings">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="settings settings-secondary">
+                        <div class="setting-option">
+                            <label><i class="fas fa-palette"></i> Theme:</label>
+                            <div class="theme-button-group">
+                                <button class="theme-btn" data-theme="default">Default</button>
+                                <button class="theme-btn" data-theme="classic">Classic B/W</button>
+                                <button class="theme-btn" data-theme="forest">Forest</button>
+                                <button class="theme-btn" data-theme="ocean">Ocean</button>
+                                <button class="theme-btn" data-theme="dark-mode">Dark</button>
+                            </div>
+                            <select id="theme-select" class="theme-select-mobile" aria-label="Theme">
+                                <option value="default">Default</option>
+                                <option value="classic">Classic B/W</option>
+                                <option value="forest">Forest</option>
+                                <option value="ocean">Ocean</option>
+                                <option value="dark-mode">Dark</option>
+                            </select>
+                        </div>
+                        <div class="setting-option">
+                            <input type="checkbox" id="toggle-indicators" checked>
+                            <label for="toggle-indicators"><i class="fas fa-bullseye"></i> Show Indicators</label>
+                        </div>
+                    </div>
                 </div>
-            </div>
-             <!-- Indicator Toggle -->
-            <div class="setting-option">
-                 <input type="checkbox" id="toggle-indicators" checked>
-                 <label for="toggle-indicators"><i class="fas fa-bullseye"></i> Show Indicators</label>
             </div>
         </div>
-        <button id="start-game-btn" class="btn btn-primary">
-            <i class="fas fa-play"></i> Start Game
-        </button>
-        <a
-            id="support-link"
-            class="btn btn-primary"
-            href="https://www.paypal.com/paypalme/alimaes"
-            target="_blank"
-            rel="noopener noreferrer"
-        >
-            <i class="fas fa-heart"></i> Support Me
-        </a>
     </div>
 
     <!-- Main Game Area -->
@@ -71,6 +122,7 @@
                 <!-- Black captures white pieces -->
             </div>
             <div id="controls-bar">
+                 <div id="black-clock" class="clock-display option-hidden">03:00</div>
                  <button id="sound-toggle-btn" class="btn btn-icon" title="Mute/Unmute Sound">
                      <i class="fas fa-volume-up"></i> <!-- Icon changes with JS -->
                  </button>
@@ -129,6 +181,7 @@
             <div id="captured-by-white" class="captured-pieces">
                 <!-- White captures black pieces -->
             </div>
+            <div id="white-clock" class="clock-display option-hidden">03:00</div>
             <div id="status-bar">
                 <div id="status-main">
                     <span id="turn-indicator">White's Turn</span>

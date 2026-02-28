@@ -7,6 +7,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const toastContainer = document.getElementById('toast-container');
     const splashScreen = document.getElementById('splash-screen');
     const startGameBtn = document.getElementById('start-game-btn');
+    const openAppearanceBtn = document.getElementById('open-appearance-btn');
+    const appearanceModal = document.getElementById('appearance-modal');
+    const closeAppearanceBtn = document.getElementById('close-appearance-btn');
+    const appearanceModalBackdrop = appearanceModal ? appearanceModal.querySelector('.appearance-modal-backdrop') : null;
     const gameContainer = document.getElementById('game-container');
     const gameOverMessage = document.getElementById('game-over-message');
     const winnerMessage = document.getElementById('winner-message');
@@ -19,6 +23,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const modeButtons = document.querySelectorAll('.mode-btn[data-mode]');
     const difficultySetting = document.getElementById('difficulty-setting');
     const botDifficultySelect = document.getElementById('bot-difficulty');
+    const timeControlSelect = document.getElementById('time-control');
+    const themeSelect = document.getElementById('theme-select');
     const indicatorCheckbox = document.getElementById('toggle-indicators');
     const flipBoardBtn = document.getElementById('flip-board-btn');
     const soundToggleBtn = document.getElementById('sound-toggle-btn');
@@ -27,6 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const promotionChoices = promotionModal.querySelector('.promotion-choices');
     const capturedWhiteContainer = document.getElementById('captured-by-white');
     const capturedBlackContainer = document.getElementById('captured-by-black');
+    const whiteClockElement = document.getElementById('white-clock');
+    const blackClockElement = document.getElementById('black-clock');
     const moveListElement = document.getElementById('move-list');
     const bodyElement = document.body;
 
@@ -37,6 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentPlayer = 'w';
     let selectedSquare = null; // Stores { row, col, element } (element is the piece div)
     let legalMoves = [];
+    let dragSource = null;
     let gameIsOver = false;
     let whiteKingPos = { row: 7, col: 4 };
     let blackKingPos = { row: 0, col: 4 };
@@ -53,6 +62,19 @@ document.addEventListener('DOMContentLoaded', () => {
     let botTurnToken = 0;
     let positionRepetitionCounts = {};
     let lastBotToastText = '';
+    let timeControl = 'none';
+    let whiteTimeMs = 0;
+    let blackTimeMs = 0;
+    let clockIntervalId = null;
+    let clockRunningColor = null;
+    let clockLastTickAt = 0;
+    let gameEndedByTimeout = false;
+    let pendingTimeoutWinner = null;
+    let botWorker = null;
+    let botWorkerRequestId = 0;
+    const botWorkerPending = new Map();
+    let positionTimeline = [];
+    let timelineIndex = 0;
 
 
     // --- Constants ---
@@ -94,6 +116,12 @@ document.addEventListener('DOMContentLoaded', () => {
         hard: ['Bot mood: Hard and serious', 'Bot mood: Hard, no free moves'],
         expert: ['Bot mood: Expert, full calculate mode', 'Bot mood: Expert, razor sharp']
     };
+    const timeControlOptions = {
+        none: { label: 'No Clock', initialMs: 0 },
+        'blitz-3': { label: 'Blitz 3|0', initialMs: 3 * 60 * 1000 },
+        'rapid-10': { label: 'Rapid 10|0', initialMs: 10 * 60 * 1000 },
+        'rapid-15': { label: 'Rapid 15|0', initialMs: 15 * 60 * 1000 }
+    };
     function ensureChessLogicLoaded() {
         if (!window.ChessLogic) {
             throw new Error('ChessLogic is required but not loaded.');
@@ -107,6 +135,182 @@ document.addEventListener('DOMContentLoaded', () => {
         whiteKingPos = gameState.whiteKingPos;
         blackKingPos = gameState.blackKingPos;
         positionRepetitionCounts = gameState.positionRepetitionCounts;
+    }
+
+    function initBotWorker() {
+        if (typeof Worker === 'undefined') return;
+        if (botWorker) return;
+        try {
+            botWorker = new Worker('bot-worker.js');
+            botWorker.onmessage = (event) => {
+                const data = event.data || {};
+                const requestId = data.requestId;
+                if (!botWorkerPending.has(requestId)) return;
+                const pending = botWorkerPending.get(requestId);
+                botWorkerPending.delete(requestId);
+                pending.resolve(data);
+            };
+            botWorker.onerror = () => {
+                botWorkerPending.forEach(pending => pending.reject(new Error('Bot worker failed.')));
+                botWorkerPending.clear();
+                if (botWorker) {
+                    botWorker.terminate();
+                    botWorker = null;
+                }
+            };
+        } catch (error) {
+            botWorker = null;
+        }
+    }
+
+    function terminateBotWorker() {
+        if (botWorker) {
+            botWorker.terminate();
+            botWorker = null;
+        }
+        botWorkerPending.forEach(pending => pending.reject(new Error('Bot worker terminated.')));
+        botWorkerPending.clear();
+    }
+
+    function isClockEnabled() {
+        return timeControl !== 'none' && timeControlOptions[timeControl];
+    }
+
+    function formatClock(ms) {
+        const safeMs = Math.max(0, ms | 0);
+        const totalSeconds = Math.floor(safeMs / 1000);
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function renderClocks() {
+        if (!whiteClockElement || !blackClockElement) return;
+        const enabled = isClockEnabled();
+        whiteClockElement.classList.toggle('option-hidden', !enabled);
+        blackClockElement.classList.toggle('option-hidden', !enabled);
+        if (!enabled) return;
+
+        whiteClockElement.textContent = formatClock(whiteTimeMs);
+        blackClockElement.textContent = formatClock(blackTimeMs);
+        whiteClockElement.classList.toggle('active', clockRunningColor === 'w' && !gameIsOver);
+        blackClockElement.classList.toggle('active', clockRunningColor === 'b' && !gameIsOver);
+        whiteClockElement.classList.toggle('low-time', whiteTimeMs <= 30000);
+        blackClockElement.classList.toggle('low-time', blackTimeMs <= 30000);
+    }
+
+    function stopClock() {
+        if (clockIntervalId !== null) {
+            clearInterval(clockIntervalId);
+            clockIntervalId = null;
+        }
+        clockRunningColor = null;
+        clockLastTickAt = 0;
+        renderClocks();
+    }
+
+    function handleClockTimeout(loserColor) {
+        if (gameIsOver) return;
+        stopClock();
+        gameEndedByTimeout = true;
+        pendingTimeoutWinner = loserColor === 'w' ? 'b' : 'w';
+        checkGameStatus(true);
+    }
+
+    function tickClock() {
+        if (!isClockEnabled() || gameIsOver || promotionState.active || !clockRunningColor) return;
+        const now = Date.now();
+        const delta = Math.max(0, now - clockLastTickAt);
+        clockLastTickAt = now;
+
+        if (clockRunningColor === 'w') whiteTimeMs -= delta;
+        else blackTimeMs -= delta;
+
+        if (whiteTimeMs <= 0) {
+            whiteTimeMs = 0;
+            renderClocks();
+            handleClockTimeout('w');
+            return;
+        }
+        if (blackTimeMs <= 0) {
+            blackTimeMs = 0;
+            renderClocks();
+            handleClockTimeout('b');
+            return;
+        }
+        renderClocks();
+    }
+
+    function startClockForCurrentPlayer() {
+        stopClock();
+        if (!isClockEnabled() || gameIsOver || promotionState.active) return;
+        clockRunningColor = currentPlayer;
+        clockLastTickAt = Date.now();
+        clockIntervalId = setInterval(tickClock, 200);
+        renderClocks();
+    }
+
+    function initializeClocksForNewGame() {
+        gameEndedByTimeout = false;
+        pendingTimeoutWinner = null;
+        const option = timeControlOptions[timeControl] || timeControlOptions.none;
+        whiteTimeMs = option.initialMs;
+        blackTimeMs = option.initialMs;
+        stopClock();
+        renderClocks();
+    }
+
+    function createTimelineSnapshot() {
+        return {
+            gameState: window.ChessLogic.createStateSnapshot(gameState),
+            capturedWhitePieces: capturedWhitePieces.slice(),
+            capturedBlackPieces: capturedBlackPieces.slice(),
+            moveHistory: moveHistory.map(move => ({ ...move })),
+            lastMove: lastMove ? { ...lastMove } : null,
+            whiteTimeMs,
+            blackTimeMs,
+            gameEndedByTimeout,
+            pendingTimeoutWinner
+        };
+    }
+
+    function pushTimelineSnapshot() {
+        if (!gameState) return;
+        if (timelineIndex < positionTimeline.length - 1) {
+            positionTimeline = positionTimeline.slice(0, timelineIndex + 1);
+        }
+        positionTimeline.push(createTimelineSnapshot());
+        timelineIndex = positionTimeline.length - 1;
+    }
+
+    function restoreFromTimelineSnapshot(snapshot) {
+        if (!snapshot || !gameState) return;
+        window.ChessLogic.restoreStateSnapshot(gameState, snapshot.gameState);
+        syncStateRefs();
+        capturedWhitePieces = snapshot.capturedWhitePieces.slice();
+        capturedBlackPieces = snapshot.capturedBlackPieces.slice();
+        moveHistory = snapshot.moveHistory.map(move => ({ ...move }));
+        lastMove = snapshot.lastMove ? { ...snapshot.lastMove } : null;
+        whiteTimeMs = snapshot.whiteTimeMs;
+        blackTimeMs = snapshot.blackTimeMs;
+        gameEndedByTimeout = !!snapshot.gameEndedByTimeout;
+        pendingTimeoutWinner = snapshot.pendingTimeoutWinner || null;
+        selectedSquare = null;
+        legalMoves = [];
+        invalidateBotTurn();
+        updateTurnIndicator();
+        renderCapturedPieces();
+        renderMoveHistory();
+        renderBoard();
+        checkGameStatus();
+        if (!gameIsOver) startClockForCurrentPlayer();
+        if (shouldBotPlay()) scheduleBotMove();
+    }
+
+    function jumpToPly(plyIndex) {
+        if (plyIndex < 0 || plyIndex >= positionTimeline.length) return;
+        timelineIndex = plyIndex;
+        restoreFromTimelineSnapshot(positionTimeline[plyIndex]);
     }
 
     // --- Audio Setup ---
@@ -138,6 +342,8 @@ document.addEventListener('DOMContentLoaded', () => {
         applyGameMode(savedMode);
         const savedDifficulty = localStorage.getItem('chessBotDifficulty') || 'easy';
         applyBotDifficulty(savedDifficulty);
+        const savedTimeControl = localStorage.getItem('chessTimeControl') || 'none';
+        applyTimeControl(savedTimeControl);
         const savedTheme = localStorage.getItem('chessTheme') || 'default';
         applyTheme(savedTheme);
         const savedIndicatorPref = localStorage.getItem('showIndicators') !== 'false';
@@ -150,8 +356,11 @@ document.addEventListener('DOMContentLoaded', () => {
         modeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === gameMode));
         difficultySetting.classList.toggle('option-hidden', gameMode !== 'bot');
         invalidateBotTurn();
-        if (gameMode === 'bot' && !gameContainer.classList.contains('hidden') && shouldBotPlay()) {
-            scheduleBotMove();
+        if (!gameContainer.classList.contains('hidden') && !gameIsOver) {
+            startClockForCurrentPlayer();
+            if (shouldBotPlay()) {
+                scheduleBotMove();
+            }
         }
         updateBotLevelIndicator();
         localStorage.setItem('chessGameMode', gameMode);
@@ -166,16 +375,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         localStorage.setItem('chessBotDifficulty', botDifficulty);
     }
+    function applyTimeControl(controlName) {
+        timeControl = timeControlOptions[controlName] ? controlName : 'none';
+        if (timeControlSelect) timeControlSelect.value = timeControl;
+        localStorage.setItem('chessTimeControl', timeControl);
+        if (!gameContainer.classList.contains('hidden') && moveHistory.length === 0 && !gameIsOver) {
+            initializeClocksForNewGame();
+            startClockForCurrentPlayer();
+            return;
+        }
+        renderClocks();
+    }
     function applyTheme(themeName) {
         bodyElement.className = '';
         if (themeName !== 'default') bodyElement.classList.add(`theme-${themeName}`);
         themeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.theme === themeName));
+        if (themeSelect) themeSelect.value = themeName;
         localStorage.setItem('chessTheme', themeName);
         renderPromotionModalPieces();
     }
     function applyIndicatorPreference(show) {
         boardContainer.classList.toggle('indicators-hidden', !show);
         localStorage.setItem('showIndicators', show);
+    }
+    function openAppearanceModal() {
+        if (!appearanceModal) return;
+        appearanceModal.classList.remove('hidden');
+    }
+    function closeAppearanceModal() {
+        if (!appearanceModal) return;
+        appearanceModal.classList.add('hidden');
     }
     function applyBoardFlip() {
         isBoardFlipped = !isBoardFlipped;
@@ -266,11 +495,14 @@ document.addEventListener('DOMContentLoaded', () => {
             clearTimeout(botMoveTimeoutId);
             botMoveTimeoutId = null;
         }
+        botWorkerPending.forEach(pending => pending.reject(new Error('Bot move cancelled.')));
+        botWorkerPending.clear();
     }
     function invalidateBotTurn() {
         botTurnToken++;
         clearBotMoveTimeout();
         boardContainer.classList.remove('interaction-disabled');
+        stopClock();
     }
     function recordCurrentPosition() {
         if (!gameState) return;
@@ -311,7 +543,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         return normalized;
     }
-    function chooseBotMove() {
+    function chooseBotMoveMainThread() {
         const legalMoves = getAllLegalMovesWithContext(botColor);
         if (!legalMoves.length) return null;
         if (!window.ChessBotAI || typeof window.ChessBotAI.chooseMove !== 'function') {
@@ -335,6 +567,35 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+    function requestBotMoveFromWorker() {
+        if (!botWorker || !gameState || !shouldBotPlay()) return Promise.resolve(null);
+        return new Promise((resolve, reject) => {
+            const requestId = ++botWorkerRequestId;
+            botWorkerPending.set(requestId, { resolve, reject });
+            botWorker.postMessage({
+                requestId,
+                difficulty: botDifficulty,
+                botColor: botColor,
+                repetitionCounts: getBotRepetitionCounts(),
+                stateSnapshot: window.ChessLogic.createStateSnapshot(gameState)
+            });
+        });
+    }
+    async function chooseBotMoveAsync() {
+        if (!shouldBotPlay()) return null;
+        const legalMoves = getAllLegalMovesWithContext(botColor);
+        if (!legalMoves.length) return null;
+        if (!botWorker) return chooseBotMoveMainThread();
+        try {
+            const response = await requestBotMoveFromWorker();
+            if (!shouldBotPlay()) return null;
+            if (!response || response.error) return chooseBotMoveMainThread();
+            return response.move || null;
+        } catch (error) {
+            if (!shouldBotPlay()) return null;
+            return chooseBotMoveMainThread();
+        }
+    }
     function scheduleBotMove() {
         if (!shouldBotPlay()) return;
         clearBotMoveTimeout();
@@ -343,7 +604,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const thinkingLine = getBotThinkingPhrase();
         const thinkTime = getBotThinkTime();
         showToast(thinkingLine, Math.max(thinkTime + 260, 900));
-        botMoveTimeoutId = setTimeout(() => {
+        botMoveTimeoutId = setTimeout(async () => {
             botMoveTimeoutId = null;
             if (turnToken !== botTurnToken) {
                 boardContainer.classList.remove('interaction-disabled');
@@ -353,8 +614,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 boardContainer.classList.remove('interaction-disabled');
                 return;
             }
-            const botMove = chooseBotMove();
+            const botMove = await chooseBotMoveAsync();
             if (turnToken !== botTurnToken) {
+                boardContainer.classList.remove('interaction-disabled');
+                return;
+            }
+            if (!shouldBotPlay()) {
                 boardContainer.classList.remove('interaction-disabled');
                 return;
             }
@@ -376,6 +641,9 @@ document.addEventListener('DOMContentLoaded', () => {
         gameContainer.classList.add('hidden'); splashScreen.classList.remove('hidden');
         gameOverMessage.classList.add('hidden'); promotionModal.classList.add('hidden');
         gameIsOver = false; selectedSquare = null; legalMoves = [];
+        gameEndedByTimeout = false;
+        pendingTimeoutWinner = null;
+        renderClocks();
     }
 
     // --- Initialization ---
@@ -392,7 +660,11 @@ document.addEventListener('DOMContentLoaded', () => {
         capturedBlackPieces = [];
         moveHistory = [];
         lastMove = null;
+        positionTimeline = [];
+        timelineIndex = 0;
         promotionState.active = false;
+        gameEndedByTimeout = false;
+        pendingTimeoutWinner = null;
 
         updateTurnIndicator();
         clearHighlights(); // Clears selected/legal moves state and styles
@@ -407,8 +679,11 @@ document.addEventListener('DOMContentLoaded', () => {
         gameOverMessage.classList.add('hidden'); promotionModal.classList.add('hidden');
         boardContainer.classList.remove('interaction-disabled');
         updateBotLevelIndicator();
+        initializeClocksForNewGame();
         recordCurrentPosition();
+        pushTimelineSnapshot();
         playSound('start');
+        startClockForCurrentPlayer();
         if (shouldBotPlay()) scheduleBotMove();
     }
 
@@ -436,6 +711,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const actualRow = r; const actualCol = c;
                 square.classList.add((actualRow + actualCol) % 2 === 0 ? 'light' : 'dark');
                 square.dataset.row = actualRow; square.dataset.col = actualCol;
+                square.addEventListener('dragover', handleSquareDragOver);
+                square.addEventListener('drop', handleSquareDrop);
 
                 // Apply current last move highlights based on lastMove state
                 if (lastMove) {
@@ -451,6 +728,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (pieceCode) {
                     const pieceElement = document.createElement('div');
                     pieceElement.classList.add('piece', pieceCode);
+                    pieceElement.draggable = !gameIsOver && !promotionState.active;
+                    pieceElement.addEventListener('dragstart', handlePieceDragStart);
+                    pieceElement.addEventListener('dragend', handlePieceDragEnd);
                     square.appendChild(pieceElement);
 
                     // Apply animation only to the piece on the destination square
@@ -504,7 +784,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (movePair) {
                 const moveSanSpan = document.createElement('span');
                 moveSanSpan.textContent = move.san;
-                if (i === moveHistory.length - 1) moveSanSpan.classList.add('current-move');
+                moveSanSpan.dataset.ply = String(i + 1);
+                moveSanSpan.classList.add('move-entry');
+                if (i + 1 === timelineIndex) moveSanSpan.classList.add('current-move');
                 movePair.appendChild(moveSanSpan);
             }
         }
@@ -533,6 +815,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Highlighting Logic ---
     function clearHighlights() { // Clears selection and legal move indicators ONLY
+        dragSource = null;
         if (selectedSquare && selectedSquare.element) {
              selectedSquare.element.classList.remove('selected'); // Remove style from piece
         }
@@ -566,7 +849,73 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function tryMoveFromTo(fromRow, fromCol, toRow, toCol) {
+        const piece = board[fromRow][fromCol];
+        if (!piece || piece[0] !== currentPlayer) return false;
+        const moves = calculateLegalMoves(fromRow, fromCol);
+        const selectedMove = moves.find(move => move.row === toRow && move.col === toCol);
+        if (!selectedMove) return false;
+        const moveDetails = {
+            fromRow,
+            fromCol,
+            toRow,
+            toCol,
+            piece,
+            captured: selectedMove.captured || board[toRow][toCol],
+            isEnPassant: !!selectedMove.isEnPassant,
+            isCastling: !!selectedMove.isCastling,
+            castleSide: selectedMove.castleSide || null
+        };
+        makeMove(moveDetails, { source: 'human' });
+        return true;
+    }
+
     // --- Event Handling ---
+    function handlePieceDragStart(event) {
+        if (gameIsOver || promotionState.active || shouldBotPlay()) {
+            event.preventDefault();
+            return;
+        }
+        const pieceEl = event.currentTarget;
+        const square = pieceEl.parentElement;
+        if (!square) return;
+        const fromRow = Number(square.dataset.row);
+        const fromCol = Number(square.dataset.col);
+        const piece = board[fromRow][fromCol];
+        if (!piece || piece[0] !== currentPlayer) {
+            event.preventDefault();
+            return;
+        }
+        dragSource = { row: fromRow, col: fromCol };
+        selectPiece(fromRow, fromCol);
+        if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', `${fromRow},${fromCol}`);
+        }
+    }
+    function handlePieceDragEnd() {
+        dragSource = null;
+    }
+    function handleSquareDragOver(event) {
+        if (!dragSource || gameIsOver || promotionState.active || shouldBotPlay()) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    }
+    function handleSquareDrop(event) {
+        if (!dragSource || gameIsOver || promotionState.active || shouldBotPlay()) return;
+        event.preventDefault();
+        const targetSquare = event.currentTarget;
+        const toRow = Number(targetSquare.dataset.row);
+        const toCol = Number(targetSquare.dataset.col);
+        const moved = tryMoveFromTo(dragSource.row, dragSource.col, toRow, toCol);
+        if (!moved) {
+            clearHighlights();
+            selectedSquare = null;
+            legalMoves = [];
+        }
+        dragSource = null;
+    }
+
     function handleSquareClick(event) {
         if (gameIsOver || promotionState.active || shouldBotPlay()) return;
 
@@ -579,16 +928,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedSquare) { // A piece is already selected
             const selectedMove = legalMoves.find(move => move.row === row && move.col === col);
             if (selectedMove) { // Clicked on a legal move square
-                const moveDetails = {
-                    fromRow: selectedSquare.row, fromCol: selectedSquare.col,
-                    toRow: row, toCol: col,
-                    piece: board[selectedSquare.row][selectedSquare.col],
-                    captured: selectedMove.captured || board[row][col],
-                    isEnPassant: !!selectedMove.isEnPassant,
-                    isCastling: !!selectedMove.isCastling,
-                    castleSide: selectedMove.castleSide || null
-                };
-                makeMove(moveDetails, { source: 'human' });
+                tryMoveFromTo(selectedSquare.row, selectedSquare.col, row, col);
             } else if (clickedPieceColor === currentPlayer && (row !== selectedSquare.row || col !== selectedSquare.col)) {
                 // Clicked on a different piece of the same color - switch selection
                 selectPiece(row, col); playSound('select');
@@ -688,6 +1028,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderBoard();
         checkGameStatus();
         renderMoveHistory();
+        pushTimelineSnapshot();
+        startClockForCurrentPlayer();
 
         if (shouldBotPlay()) {
             scheduleBotMove();
@@ -713,6 +1055,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Check/Checkmate/Stalemate/Draw Logic ---
     function checkGameStatus() {
         if (!gameState) return;
+        if (gameEndedByTimeout && pendingTimeoutWinner) {
+            gameIsOver = true;
+            winnerMessage.textContent = `${pendingTimeoutWinner === 'w' ? 'White' : 'Black'} wins on time!`;
+            gameOverMessage.classList.remove('hidden');
+            boardContainer.classList.add('interaction-disabled');
+            checkIndicator.textContent = '';
+            lastMove = null;
+            stopClock();
+            playSound('end');
+            return;
+        }
         const status = window.ChessLogic.getGameStatus(gameState);
 
         if (status.isGameOver) {
@@ -744,6 +1097,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (toSq) toSq.classList.remove('last-move-to');
             }
             lastMove = null;
+            stopClock();
             playSound('end');
             return;
         }
@@ -756,7 +1110,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- UI Interaction & Event Listeners ---
-    startGameBtn.addEventListener('click', () => { splashScreen.classList.add('hidden'); gameContainer.classList.remove('hidden'); setupBoard(); });
+    startGameBtn.addEventListener('click', () => {
+        closeAppearanceModal();
+        splashScreen.classList.add('hidden');
+        gameContainer.classList.remove('hidden');
+        setupBoard();
+    });
+    if (openAppearanceBtn) {
+        openAppearanceBtn.addEventListener('click', openAppearanceModal);
+    }
+    if (closeAppearanceBtn) {
+        closeAppearanceBtn.addEventListener('click', closeAppearanceModal);
+    }
+    if (appearanceModalBackdrop) {
+        appearanceModalBackdrop.addEventListener('click', closeAppearanceModal);
+    }
     resetGameBtn.addEventListener('click', setupBoard);
     goHomeBtn.addEventListener('click', goToHomeScreen);
     backToHomeBtn.addEventListener('click', goToHomeScreen);
@@ -766,16 +1134,36 @@ document.addEventListener('DOMContentLoaded', () => {
     if (botDifficultySelect) {
         botDifficultySelect.addEventListener('change', (event) => applyBotDifficulty(event.target.value));
     }
+    if (timeControlSelect) {
+        timeControlSelect.addEventListener('change', (event) => applyTimeControl(event.target.value));
+    }
+    if (themeSelect) {
+        themeSelect.addEventListener('change', (event) => applyTheme(event.target.value));
+    }
     themeButtons.forEach(button => button.addEventListener('click', () => applyTheme(button.dataset.theme)));
     indicatorCheckbox.addEventListener('change', (event) => { applyIndicatorPreference(event.target.checked); if (selectedSquare) highlightLegalMoves(legalMoves); });
+    moveListElement.addEventListener('click', (event) => {
+        const target = event.target.closest('.move-entry');
+        if (!target || promotionState.active) return;
+        const ply = Number(target.dataset.ply);
+        if (!Number.isInteger(ply)) return;
+        jumpToPly(ply);
+    });
     promotionChoices.addEventListener('click', (event) => {
         const button = event.target.closest('button');
         if (button && promotionState.active && promotionState.callback) {
             const chosenPiece = button.dataset.piece; promotionState.callback(chosenPiece);
         }
     });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && appearanceModal && !appearanceModal.classList.contains('hidden')) {
+            closeAppearanceModal();
+        }
+    });
 
     // --- Initial Load ---
+    initBotWorker();
+    window.addEventListener('beforeunload', terminateBotWorker);
     loadPreferences();
 
 }); // End DOMContentLoaded

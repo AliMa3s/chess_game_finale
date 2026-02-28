@@ -799,4 +799,4 @@
         getAlgebraicSquare,
         getGameStatus
     };
-})(window);
+})(typeof window !== 'undefined' ? window : self);
